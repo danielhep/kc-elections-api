@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 const CSV_URL: &str = "https://aqua.kingcounty.gov/elections/2021/aug-primary/webresults.csv";
 const CACHE_KEY: &str = "election_data";
-const CACHE_EXPIRATION: u64 = 3600; // 1 hour
+const CACHE_EXPIRATION: u64 = 5; // 5 seconds
 
 #[derive(Clone)]
 struct AppState {
@@ -25,11 +25,24 @@ impl<'de> Deserialize<'de> for QuotedFloat {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let trimmed = s.trim_matches(|c| c == '"' || c == ' ');
-        f64::from_str(trimmed)
-            .map(QuotedFloat)
-            .map_err(serde::de::Error::custom)
+        // This will accept both string and number representations
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StringOrFloat {
+            String(String),
+            Float(f64),
+        }
+
+        let value = StringOrFloat::deserialize(deserializer)?;
+        match value {
+            StringOrFloat::String(s) => {
+                let trimmed = s.trim_matches(|c| c == '"' || c == ' ');
+                f64::from_str(trimmed)
+                    .map(QuotedFloat)
+                    .map_err(serde::de::Error::custom)
+            }
+            StringOrFloat::Float(f) => Ok(QuotedFloat(f)),
+        }
     }
 }
 
@@ -74,9 +87,7 @@ struct ElectionData {
     percent_of_votes: QuotedFloat,
 }
 
-async fn fetch_and_parse_csv(
-    redis: Arc<Mutex<MultiplexedConnection>>,
-) -> Result<Vec<ElectionData>, Box<dyn std::error::Error>> {
+async fn fetch_and_parse_csv() -> Result<Vec<ElectionData>, Box<dyn std::error::Error>> {
     let response = reqwest::get(CSV_URL).await?.text().await?;
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(true)
@@ -85,25 +96,16 @@ async fn fetch_and_parse_csv(
 
     for result in reader.deserialize() {
         let record: ElectionData = result?;
-        // println!("{:?}", record);
         parsed_data.push(record);
     }
-
-    let json_data = serde_json::to_string(&parsed_data)?;
-
-    let mut redis = redis.lock().await;
-    let _: () = redis::cmd("SETEX")
-        .arg(CACHE_KEY)
-        .arg(CACHE_EXPIRATION)
-        .arg(&json_data)
-        .query_async(&mut *redis)
-        .await?;
 
     Ok(parsed_data)
 }
 
 async fn get_all_data(data: web::Data<AppState>) -> Result<Vec<ElectionData>, actix_web::Error> {
     let mut redis = data.redis.lock().await;
+
+    // Try to get cached data
     let cached_data: Option<String> = redis::cmd("GET")
         .arg(CACHE_KEY)
         .query_async(&mut *redis)
@@ -114,14 +116,39 @@ async fn get_all_data(data: web::Data<AppState>) -> Result<Vec<ElectionData>, ac
         })?;
 
     match cached_data {
-        Some(data) => serde_json::from_str(&data).map_err(|e| {
-            error!("JSON deserialization error: {}", e);
-            actix_web::error::ErrorInternalServerError("Data parsing error")
-        }),
-        None => fetch_and_parse_csv(data.redis.clone()).await.map_err(|e| {
-            error!("CSV fetch and parse error: {}", e);
-            actix_web::error::ErrorInternalServerError("Data fetch error")
-        }),
+        Some(data) => {
+            // If we have cached data, parse and return it
+            serde_json::from_str(&data).map_err(|e| {
+                error!("JSON deserialization error: {}", e);
+                actix_web::error::ErrorInternalServerError("Data parsing error")
+            })
+        }
+        None => {
+            // If no cached data, fetch and parse CSV
+            let parsed_data = fetch_and_parse_csv().await.map_err(|e| {
+                error!("CSV fetch and parse error: {}", e);
+                actix_web::error::ErrorInternalServerError("Data fetch error")
+            })?;
+
+            // Cache the new data
+            let json_data = serde_json::to_string(&parsed_data).map_err(|e| {
+                error!("JSON serialization error: {}", e);
+                actix_web::error::ErrorInternalServerError("Data serialization error")
+            })?;
+
+            let _: () = redis::cmd("SETEX")
+                .arg(CACHE_KEY)
+                .arg(CACHE_EXPIRATION)
+                .arg(&json_data)
+                .query_async(&mut *redis)
+                .await
+                .map_err(|e| {
+                    error!("Redis caching error: {}", e);
+                    actix_web::error::ErrorInternalServerError("Redis caching error")
+                })?;
+
+            Ok(parsed_data)
+        }
     }
 }
 
@@ -174,6 +201,24 @@ async fn get_summary_statistics(data: web::Data<AppState>) -> impl Responder {
             HttpResponse::Ok().json(summary)
         }
         Err(_) => HttpResponse::InternalServerError().body("Failed to get data"),
+    }
+}
+
+async fn get_ballot_titles(data: web::Data<AppState>) -> impl Responder {
+    match get_all_data(data).await {
+        Ok(all_data) => {
+            let mut ballot_titles: Vec<String> = all_data
+                .into_iter()
+                .map(|record| record.ballot_title)
+                .collect();
+            ballot_titles.sort();
+            ballot_titles.dedup();
+            HttpResponse::Ok().json(ballot_titles)
+        }
+        Err(e) => {
+            error!("Failed to get ballot titles: {}", e);
+            HttpResponse::InternalServerError().body("Failed to get data")
+        }
     }
 }
 
