@@ -346,7 +346,7 @@ async fn get_contest_data_html(
     let contest_id = query.contest;
     match get_all_data(data).await {
         Ok(all_data) => {
-            let contest_data: Vec<ElectionData> = all_data
+            let mut contest_data: Vec<ElectionData> = all_data
                 .into_iter()
                 .filter(|record| record.gems_contest_id == contest_id)
                 .collect();
@@ -355,6 +355,12 @@ async fn get_contest_data_html(
                 return HttpResponse::Ok().body("No data available for this contest.");
             }
 
+            contest_data.sort_by(|a, b| {
+                b.percent_of_votes
+                    .0
+                    .partial_cmp(&a.percent_of_votes.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             let markup = templates::contest_details(&contest_data);
             HttpResponse::Ok()
                 .content_type("text/html")
