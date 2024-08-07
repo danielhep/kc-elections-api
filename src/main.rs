@@ -1,3 +1,4 @@
+use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use env_logger;
 use log::error;
@@ -8,7 +9,9 @@ use std::collections::HashMap;
 use std::{io::Cursor, str::FromStr, sync::Arc};
 use tokio::sync::Mutex;
 
-const CSV_URL: &str = "https://aqua.kingcounty.gov/elections/2021/aug-primary/webresults.csv";
+mod templates;
+
+const CSV_URL: &str = "https://aqua.kingcounty.gov/elections/2024/aug-primary/webresults.csv";
 const CACHE_KEY: &str = "election_data";
 const CACHE_EXPIRATION: u64 = 5; // 5 seconds
 
@@ -240,6 +243,127 @@ async fn get_ballot_titles(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
+// New HTML endpoints
+
+async fn index(data: web::Data<AppState>) -> impl Responder {
+    match get_all_data(data).await {
+        Ok(all_data) => {
+            let mut ballot_map: HashMap<String, i32> = HashMap::new();
+            for record in all_data {
+                ballot_map
+                    .entry(record.ballot_title.clone())
+                    .or_insert(record.gems_contest_id);
+            }
+
+            let mut ballot_info: Vec<BallotInfo> = ballot_map
+                .into_iter()
+                .map(|(ballot_title, contest_id)| BallotInfo {
+                    contest_id,
+                    ballot_title,
+                })
+                .collect();
+
+            ballot_info.sort_by(|a, b| a.ballot_title.cmp(&b.ballot_title));
+
+            HttpResponse::Ok()
+                .content_type("text/html")
+                .body(templates::index(&ballot_info).into_string())
+        }
+        Err(e) => {
+            error!("Failed to get ballot titles: {}", e);
+            HttpResponse::InternalServerError().body("Failed to load page")
+        }
+    }
+}
+
+async fn get_summary_statistics_html(data: web::Data<AppState>) -> impl Responder {
+    match get_all_data(data).await {
+        Ok(all_data) => {
+            let total_votes: i32 = all_data.iter().map(|record| record.votes).sum();
+            let total_registered_voters: i32 = all_data
+                .iter()
+                .map(|record| record.registered_voters_for_district)
+                .sum();
+            let average_turnout: f64 = all_data
+                .iter()
+                .map(|record| record.percent_turnout_for_district.0)
+                .sum::<f64>()
+                / all_data.len() as f64;
+
+            let markup = templates::summary_statistics(
+                total_votes,
+                total_registered_voters,
+                average_turnout,
+            );
+            HttpResponse::Ok()
+                .content_type("text/html")
+                .body(markup.into_string())
+        }
+        Err(_) => HttpResponse::InternalServerError().body("Failed to get data"),
+    }
+}
+
+async fn get_ballot_titles_html(data: web::Data<AppState>) -> impl Responder {
+    match get_all_data(data).await {
+        Ok(all_data) => {
+            let mut ballot_map: HashMap<String, i32> = HashMap::new();
+            for record in all_data {
+                ballot_map
+                    .entry(record.ballot_title.clone())
+                    .or_insert(record.gems_contest_id);
+            }
+
+            let mut ballot_info: Vec<BallotInfo> = ballot_map
+                .into_iter()
+                .map(|(ballot_title, contest_id)| BallotInfo {
+                    contest_id,
+                    ballot_title,
+                })
+                .collect();
+
+            ballot_info.sort_by(|a, b| a.ballot_title.cmp(&b.ballot_title));
+
+            let markup = templates::ballot_titles(&ballot_info);
+            HttpResponse::Ok()
+                .content_type("text/html")
+                .body(markup.into_string())
+        }
+        Err(e) => {
+            error!("Failed to get ballot titles: {}", e);
+            HttpResponse::InternalServerError().body("Failed to get data")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ContestQuery {
+    contest: i32,
+}
+async fn get_contest_data_html(
+    data: web::Data<AppState>,
+    query: web::Query<ContestQuery>,
+) -> impl Responder {
+    let contest_id = query.contest;
+    match get_all_data(data).await {
+        Ok(all_data) => {
+            let contest_data: Vec<ElectionData> = all_data
+                .into_iter()
+                .filter(|record| record.gems_contest_id == contest_id)
+                .collect();
+
+            if contest_data.is_empty() {
+                return HttpResponse::Ok().body("No data available for this contest.");
+            }
+
+            let markup = templates::contest_details(&contest_data);
+            HttpResponse::Ok()
+                .content_type("text/html")
+                .body(markup.into_string())
+        }
+        Err(_) => HttpResponse::InternalServerError().body("Failed to get data"),
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
@@ -256,8 +380,13 @@ async fn main() -> std::io::Result<()> {
     };
 
     HttpServer::new(move || {
+        // Create a CORS middleware
+        let cors = Cors::permissive();
+
         App::new()
+            .wrap(cors) // Add this line to wrap the entire app with CORS middleware
             .app_data(web::Data::new(app_state.clone()))
+            .route("/", web::get().to(index))
             .route("/election-data", web::get().to(get_all_data_handler))
             .route(
                 "/election-data/contest/{contest_id}",
@@ -270,6 +399,19 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/election-data/ballot-titles",
                 web::get().to(get_ballot_titles),
+            )
+            // HTML endpoints
+            .route(
+                "/election-data/summary-html",
+                web::get().to(get_summary_statistics_html),
+            )
+            .route(
+                "/election-data/ballot-titles-html",
+                web::get().to(get_ballot_titles_html),
+            )
+            .route(
+                "/election-data/contest-html",
+                web::get().to(get_contest_data_html),
             )
     })
     .bind("127.0.0.1:8080")?
