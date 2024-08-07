@@ -1,9 +1,8 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use env_logger;
-use log::{error, info};
+use log::error;
 use redis::aio::MultiplexedConnection;
 use redis::Client as RedisClient;
-use redis::Commands;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::{io::Cursor, str::FromStr, sync::Arc};
