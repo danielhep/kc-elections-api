@@ -5,6 +5,7 @@ use redis::aio::MultiplexedConnection;
 use redis::Client as RedisClient;
 use redis::Commands;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 use std::{io::Cursor, str::FromStr, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -204,16 +205,34 @@ async fn get_summary_statistics(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct BallotInfo {
+    contest_id: i32,
+    ballot_title: String,
+}
+
 async fn get_ballot_titles(data: web::Data<AppState>) -> impl Responder {
     match get_all_data(data).await {
         Ok(all_data) => {
-            let mut ballot_titles: Vec<String> = all_data
+            let mut ballot_map: HashMap<String, i32> = HashMap::new();
+
+            for record in all_data {
+                ballot_map
+                    .entry(record.ballot_title)
+                    .or_insert(record.gems_contest_id);
+            }
+
+            let mut ballot_info: Vec<BallotInfo> = ballot_map
                 .into_iter()
-                .map(|record| record.ballot_title)
+                .map(|(ballot_title, contest_id)| BallotInfo {
+                    contest_id,
+                    ballot_title,
+                })
                 .collect();
-            ballot_titles.sort();
-            ballot_titles.dedup();
-            HttpResponse::Ok().json(ballot_titles)
+
+            ballot_info.sort_by(|a, b| a.ballot_title.cmp(&b.ballot_title));
+
+            HttpResponse::Ok().json(ballot_info)
         }
         Err(e) => {
             error!("Failed to get ballot titles: {}", e);
@@ -248,6 +267,10 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/election-data/summary",
                 web::get().to(get_summary_statistics),
+            )
+            .route(
+                "/election-data/ballot-titles",
+                web::get().to(get_ballot_titles),
             )
     })
     .bind("127.0.0.1:8080")?
