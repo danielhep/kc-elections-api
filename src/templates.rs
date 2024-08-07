@@ -28,7 +28,7 @@ pub fn index(ballot_info: &[BallotInfo]) -> Markup {
                         select id="contest-select" name="contest" class="mb-4 p-2 border rounded" hx-get="/election-data/contest-html" hx-target="#contest-details" hx-trigger="change" {
                             option value="" { "Select a contest" }
                             @for info in ballot_info {
-                                option value=(info.contest_id) { (info.ballot_title) }
+                                option value=(info.contest_id) { (info.ballot_title) " - " (info.district_name) }
                             }
                         }
                     }
@@ -54,14 +54,6 @@ pub fn summary_statistics(
         p { strong { "Total Votes: " } (total_votes) }
         p { strong { "Total Registered Voters: " } (total_registered_voters) }
         p { strong { "Average Turnout: " } (format!("{:.2}%", average_turnout)) }
-    }
-}
-
-pub fn ballot_titles(ballot_info: &[BallotInfo]) -> Markup {
-    html! {
-        @for info in ballot_info {
-            option value=(info.contest_id) { (info.ballot_title) }
-        }
     }
 }
 

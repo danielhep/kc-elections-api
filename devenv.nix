@@ -14,6 +14,7 @@
   # Set up environment variables
   env = {
     REDIS_URL = "redis://localhost:6379";  # Add Redis URL
+    CSV_URL = "https://aqua.kingcounty.gov/elections/2024/aug-primary/webresults.csv";
   };
 
   # Shell configuration
