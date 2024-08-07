@@ -1,11 +1,11 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use csv::Reader;
 use env_logger;
 use log::{error, info};
 use redis::aio::MultiplexedConnection;
 use redis::Client as RedisClient;
-use serde::{Deserialize, Serialize};
-use std::{io::Cursor, sync::Arc};
+use redis::Commands;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::{io::Cursor, str::FromStr, sync::Arc};
 use tokio::sync::Mutex;
 
 const CSV_URL: &str = "https://aqua.kingcounty.gov/elections/2021/aug-primary/webresults.csv";
@@ -15,6 +15,31 @@ const CACHE_EXPIRATION: u64 = 3600; // 1 hour
 #[derive(Clone)]
 struct AppState {
     redis: Arc<Mutex<MultiplexedConnection>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct QuotedFloat(f64);
+
+impl<'de> Deserialize<'de> for QuotedFloat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let trimmed = s.trim_matches(|c| c == '"' || c == ' ');
+        f64::from_str(trimmed)
+            .map(QuotedFloat)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for QuotedFloat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.serialize(serializer)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -36,7 +61,7 @@ struct ElectionData {
     #[serde(rename = "Registered Voters for District")]
     registered_voters_for_district: i32,
     #[serde(rename = "Percent Turnout for District")]
-    percent_turnout_for_district: f64,
+    percent_turnout_for_district: QuotedFloat,
     #[serde(rename = "Candidate Sort Seq")]
     candidate_sort_seq: i32,
     #[serde(rename = "Ballot Response")]
@@ -46,18 +71,21 @@ struct ElectionData {
     #[serde(rename = "Votes")]
     votes: i32,
     #[serde(rename = "Percent of Votes")]
-    percent_of_votes: f64,
+    percent_of_votes: QuotedFloat,
 }
 
 async fn fetch_and_parse_csv(
     redis: Arc<Mutex<MultiplexedConnection>>,
 ) -> Result<Vec<ElectionData>, Box<dyn std::error::Error>> {
     let response = reqwest::get(CSV_URL).await?.text().await?;
-    let mut reader = Reader::from_reader(Cursor::new(response));
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(Cursor::new(response));
     let mut parsed_data: Vec<ElectionData> = Vec::new();
 
     for result in reader.deserialize() {
         let record: ElectionData = result?;
+        // println!("{:?}", record);
         parsed_data.push(record);
     }
 
@@ -133,7 +161,7 @@ async fn get_summary_statistics(data: web::Data<AppState>) -> impl Responder {
                 .sum();
             let average_turnout: f64 = all_data
                 .iter()
-                .map(|record| record.percent_turnout_for_district)
+                .map(|record| record.percent_turnout_for_district.0)
                 .sum::<f64>()
                 / all_data.len() as f64;
 
