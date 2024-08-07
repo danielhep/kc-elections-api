@@ -3,21 +3,16 @@
 {
   # Packages to install
   packages = with pkgs; [
-    rustc
-    cargo
-    rust-analyzer
-    clippy
-    rustfmt
-    pkg-config
-    openssl
-    libiconv  # Add this line
     redis
+    darwin.apple_sdk.frameworks.SystemConfiguration
   ];
+
+  languages.rust = {
+    enable = true;
+  };
 
   # Set up environment variables
   env = {
-    RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
-    RUSTFLAGS = "-L ${pkgs.libiconv}/lib";  # Add this line
     REDIS_URL = "redis://localhost:6379";  # Add Redis URL
   };
 

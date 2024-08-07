@@ -1,7 +1,7 @@
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use env_logger;
-use log::error;
+use log::{error, info};
 use redis::aio::MultiplexedConnection;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -373,7 +373,7 @@ async fn get_contest_data_html(
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-
+    info!("Hello!");
     let redis_client = RedisClient::open("redis://127.0.0.1/")
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let redis_conn = redis_client
@@ -420,7 +420,7 @@ async fn main() -> std::io::Result<()> {
                 web::get().to(get_contest_data_html),
             )
     })
-    .bind("127.0.0.1:8080")?
+    .bind("0.0.0.0:8080")?
     .run()
     .await
 }
