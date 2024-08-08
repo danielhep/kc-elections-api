@@ -8,13 +8,13 @@ pub fn index(ballot_info: &[BallotInfo]) -> Markup {
             head {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
-                title { "Election Data Dashboard" }
+                title { "King County Election Data Dashboard" }
                 script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/1.9.10/htmx.min.js" {}
                 script src="https://cdn.tailwindcss.com" {}
             }
             body class="bg-gray-100" {
                 div class="container mx-auto p-4" {
-                    h1 class="text-3xl font-bold mb-4" { "Election Data Dashboard" }
+                    h1 class="text-3xl font-bold mb-4" { "King County Election Data Dashboard" }
 
                     div class="mb-8" {
                         h2 class="text-2xl font-semibold mb-2" { "Summary Statistics" }
@@ -38,6 +38,12 @@ pub fn index(ballot_info: &[BallotInfo]) -> Markup {
                         div id="contest-details" class="bg-white p-4 rounded shadow" {
                             "Select a contest to view details."
                         }
+                    }
+                }
+                footer class="container mx-auto my-4" {
+                    p {
+                        "Not affiliated with King County government. Made by Daniel Heppner. "
+                        a class="underline" href="https://github.com/danielhep/kc-elections-api" {"Source available on GitHub"}
                     }
                 }
             }
