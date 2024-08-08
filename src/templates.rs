@@ -1,7 +1,10 @@
+use std::env;
+
 use crate::{BallotInfo, ElectionData};
 use maud::{html, Markup, DOCTYPE};
 
 pub fn index(ballot_info: &[BallotInfo]) -> Markup {
+    let goatcounter_url = env::var("GOATCOUNTER_URL");
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -11,6 +14,9 @@ pub fn index(ballot_info: &[BallotInfo]) -> Markup {
                 title { "King County Election Data Dashboard" }
                 script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/1.9.10/htmx.min.js" {}
                 script src="https://cdn.tailwindcss.com" {}
+                @if goatcounter_url.is_ok() {
+                    script data-goatcounter=(goatcounter_url.unwrap()) src="//gc.zgo.at/count.js" async {}
+                }
             }
             body class="bg-gray-100" {
                 div class="container mx-auto p-4" {

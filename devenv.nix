@@ -15,6 +15,7 @@
   env = {
     REDIS_URL = "redis://localhost:6379";  # Add Redis URL
     CSV_URL = "https://aqua.kingcounty.gov/elections/2024/aug-primary/webresults.csv";
+    GOATCOUNTER_URL = "https://danielhep.goatcounter.com/count";
   };
 
   # Shell configuration
