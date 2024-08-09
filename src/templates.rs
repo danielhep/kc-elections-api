@@ -1,10 +1,12 @@
-use std::env;
+use std::{collections::HashMap, env};
 
 use crate::{BallotInfo, ElectionData};
 use maud::{html, Markup, DOCTYPE};
 
-pub fn index(ballot_info: &[BallotInfo]) -> Markup {
+pub fn index(ballot_info: &HashMap<String, Vec<BallotInfo>>) -> Markup {
     let goatcounter_url = env::var("GOATCOUNTER_URL");
+    let mut keys_sorted: Vec<String> = ballot_info.keys().cloned().collect();
+    keys_sorted.sort_unstable();
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -23,18 +25,17 @@ pub fn index(ballot_info: &[BallotInfo]) -> Markup {
                     h1 class="text-3xl font-bold mb-4" { "King County Election Data Dashboard" }
 
                     div class="mb-8" {
-                        h2 class="text-2xl font-semibold mb-2" { "Summary Statistics" }
-                        div id="summary-stats" hx-get="/election-data/summary-html" hx-trigger="load" class="bg-white p-4 rounded shadow" {
-                            "Loading summary statistics..."
-                        }
-                    }
-
-                    div class="mb-8" {
-                        h2 class="text-2xl font-semibold mb-2" { "Ballot Titles" }
-                        select id="contest-select" name="contest" class="mb-4 p-2 border rounded" hx-get="/election-data/contest-html" hx-target="#contest-details" hx-trigger="change" {
-                            option value="" { "Select a contest" }
-                            @for info in ballot_info {
-                                option value=(info.contest_id) { (info.ballot_title) " - " (info.district_name) }
+                        h2 class="text-2xl font-semibold mb-2" { "Contests by Ballot Title" }
+                        div class="grid grid-cols-2 gap-4" {
+                            @for title in keys_sorted {
+                                div {
+                                    h3 class="text-lg font-bold mb-2" { (title) }
+                                    ul class="grid grid-cols-[repeat(auto-fill,minmax(120px,max-content))] auto-rows-auto gap-x-4 gap-y-2" {
+                                        @for contest in ballot_info.get(&title).unwrap() {
+                                            li { (contest.district_name ) }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -48,8 +49,8 @@ pub fn index(ballot_info: &[BallotInfo]) -> Markup {
                 }
                 footer class="container mx-auto my-4" {
                     p {
-                        "Not affiliated with King County government. Made by Daniel Heppner. "
-                        a class="underline" href="https://github.com/danielhep/kc-elections-api" {"Source available on GitHub"}
+                        "You have found a Daniel Heppner side project. Don't get it twisted, this isn't official! "
+                        a class="underline" href="https://github.com/danielhep/kc-elections-api" {"See the messy source code on GitHub."}
                     }
                 }
             }

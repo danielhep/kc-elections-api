@@ -5,6 +5,7 @@ use log::{error, info};
 use redis::aio::MultiplexedConnection;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::env;
 use std::{io::Cursor, str::FromStr, sync::Arc};
@@ -163,7 +164,9 @@ struct BallotInfo {
     district_name: String,
 }
 
-async fn get_contests(data: web::Data<AppState>) -> Result<Vec<BallotInfo>, actix_web::Error> {
+async fn get_contests(
+    data: web::Data<AppState>,
+) -> Result<HashMap<String, Vec<BallotInfo>>, actix_web::Error> {
     match get_all_data(data).await {
         Ok(all_data) => {
             let mut ballot_map: HashMap<i32, BallotInfo> = HashMap::new();
@@ -178,11 +181,20 @@ async fn get_contests(data: web::Data<AppState>) -> Result<Vec<BallotInfo>, acti
                     });
             }
 
-            let mut ballot_info: Vec<BallotInfo> =
-                ballot_map.into_iter().map(|(_id, info)| info).collect();
+            let mut contests_by_title: HashMap<String, Vec<BallotInfo>> = HashMap::new();
+            for ele in ballot_map {
+                let ballot_title = ele.1.ballot_title.clone();
+                contests_by_title
+                    .entry(ballot_title)
+                    .or_insert_with(Vec::new)
+                    .push(ele.1);
+            }
 
-            ballot_info.sort_by(|a, b| a.ballot_title.cmp(&b.ballot_title));
-            return Ok(ballot_info);
+            for value in contests_by_title.values_mut() {
+                value.sort_by(|a, b| a.district_name.cmp(&b.district_name));
+            }
+
+            return Ok(contests_by_title);
         }
         Err(e) => {
             error!("Failed to get ballot titles: {}", e);
