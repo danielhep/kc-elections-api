@@ -1,12 +1,10 @@
 use std::{collections::HashMap, env};
 
-use crate::{BallotInfo, ElectionData};
+use crate::Contest;
 use maud::{html, Markup, DOCTYPE};
 
-pub fn index(ballot_info: &HashMap<String, Vec<BallotInfo>>) -> Markup {
+pub fn header() -> Markup {
     let goatcounter_url = env::var("GOATCOUNTER_URL");
-    let mut keys_sorted: Vec<String> = ballot_info.keys().cloned().collect();
-    keys_sorted.sort_unstable();
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -20,76 +18,86 @@ pub fn index(ballot_info: &HashMap<String, Vec<BallotInfo>>) -> Markup {
                     script data-goatcounter=(goatcounter_url.unwrap()) src="//gc.zgo.at/count.js" async {}
                 }
             }
-            body class="bg-gray-100" {
-                div class="container mx-auto p-4" {
-                    h1 class="text-3xl font-bold mb-4" { "King County Election Data Dashboard" }
+        }
+    }
+}
 
-                    div class="mb-8" {
-                        h2 class="text-2xl font-semibold mb-2" { "Contests by Ballot Title" }
-                        div class="grid grid-cols-2 gap-4" {
-                            @for title in keys_sorted {
-                                div {
-                                    h3 class="text-lg font-bold mb-2" { (title) }
-                                    ul class="grid grid-cols-[repeat(auto-fill,minmax(120px,max-content))] auto-rows-auto gap-x-4 gap-y-2" {
-                                        @for contest in ballot_info.get(&title).unwrap() {
-                                            li { (contest.district_name ) }
-                                        }
-                                    }
-                                }
+pub fn footer() -> Markup {
+    html!(
+        footer class="container mx-auto my-4" {
+            p {
+                "You have found a Daniel Heppner side project. Don't get it twisted, this isn't official! "
+                a class="underline" href="https://github.com/danielhep/kc-elections-api" {"See the messy source code on GitHub."}
+            }
+            p class="text-xs" {
+                "it's written in rust btw"
+            }
+        }
+    )
+}
+
+pub fn layout(children: Markup) -> Markup {
+    html!(
+        (header())
+        body class="bg-gray-100" {
+            div class="container mx-auto p-4" {
+            h1 class="text-3xl font-bold mb-4" { a href="/" {"King County Election Data Dashboard"} }
+                div class="mb-8" {
+                    (children)
+                }
+            }
+            (footer())
+        }
+    )
+}
+
+pub fn index(ballot_info: &HashMap<String, Vec<Contest>>) -> Markup {
+    let mut keys_sorted: Vec<String> = ballot_info.keys().cloned().collect();
+    keys_sorted.sort_unstable();
+    html! {
+        (layout(html!(
+                h2 class="text-2xl font-semibold mb-2" { "Contests by Ballot Title" }
+                div class="grid grid-cols-2 gap-4" {
+                @for title in keys_sorted {
+                    div {
+                        h3 class="text-lg font-bold mb-2" { (title) }
+                        ul class="grid grid-cols-[repeat(auto-fill,minmax(120px,max-content))] auto-rows-auto gap-x-4 gap-y-2" {
+                            @for contest in ballot_info.get(&title).unwrap() {
+                                li class="underline hover:text-slate-900" { a href=(format!("/{}", contest.id)) {(contest.district.name ) } }
                             }
                         }
                     }
-
-                    div {
-                        h2 class="text-2xl font-semibold mb-2" { "Contest Details" }
-                        div id="contest-details" class="bg-white p-4 rounded shadow" {
-                            "Select a contest to view details."
-                        }
-                    }
-                }
-                footer class="container mx-auto my-4" {
-                    p {
-                        "You have found a Daniel Heppner side project. Don't get it twisted, this isn't official! "
-                        a class="underline" href="https://github.com/danielhep/kc-elections-api" {"See the messy source code on GitHub."}
-                    }
                 }
             }
-        }
+
+            div {
+                h2 class="text-2xl font-semibold mb-2" { "Contest Details" }
+                div id="contest-details" class="bg-white p-4 rounded shadow" {
+                    "Select a contest to view details."
+                }
+            }
+        )))
     }
 }
 
-pub fn summary_statistics(
-    total_votes: i32,
-    total_registered_voters: i32,
-    average_turnout: f64,
-) -> Markup {
+pub fn contest_details_page(contest: Contest) -> Markup {
     html! {
-        p { strong { "Total Votes: " } (total_votes) }
-        p { strong { "Total Registered Voters: " } (total_registered_voters) }
-        p { strong { "Average Turnout: " } (format!("{:.2}%", average_turnout)) }
-    }
-}
-
-pub fn contest_details(contest_data: &[ElectionData]) -> Markup {
-    html! {
-        h3 class="text-xl font-semibold mb-2" { (contest_data[0].ballot_title) }
-        p { strong { "District: " } (contest_data[0].district_name) }
-        p { strong { "Ballots Counted: " } (contest_data[0].ballots_counted_for_district) }
-        p { strong { "Registered Voters: " } (contest_data[0].registered_voters_for_district) }
-        p { strong { "Turnout: " } (format!("{:.2}%", contest_data[0].percent_turnout_for_district.0)) }
-        h4 class="text-lg font-semibold mt-4 mb-2" { "Results:" }
-        ul {
-            @for item in contest_data {
-                li {
-                    (item.ballot_response) " ("
-                    @if let Some(party) = &item.party_preference {
-                        (party)
-                    } @else {
-                        "No Party"
+        (layout(html! (
+            h2 class="text-2xl font-semibold mb-2" { (contest.ballot_title) }
+            p { strong { "District: " } (contest.district.name) }
+            // p { strong { "Ballots Counted: " } (contest.) }
+            // p { strong { "Registered Voters: " } (contest.registered_voters_for_district) }
+            // p { strong { "Turnout: " } (format!("{:.2}%", contest.percent_turnout_for_district.0)) }
+            h4 class="text-lg font-semibold mt-4 mb-2" { "Results:" }
+            ul {
+                @for candidate in contest.candidates {
+                    li {
+                        (candidate.name) " ("
+                        (candidate.party_preference)
+                        "): " (candidate.votes) " votes (" (format!("{:.2}%", candidate.percentage)) ")"
                     }
-                    "): " (item.votes) " votes (" (format!("{:.2}%", item.percent_of_votes.0)) ")"
                 }
             }
-        }
+        )))
     }
 }
