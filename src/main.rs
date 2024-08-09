@@ -2,6 +2,7 @@ use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use env_logger;
 use log::{error, info};
+use maud::{html, Markup, Render};
 use redis::aio::MultiplexedConnection;
 use redis::Client as RedisClient;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -14,6 +15,70 @@ mod templates;
 
 const CACHE_KEY: &str = "election_data";
 const CACHE_EXPIRATION: u64 = 5; // 5 seconds
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+enum PartyPreference {
+    Democrat,
+    Republican,
+    NotAffiliated,
+}
+
+impl FromStr for PartyPreference {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lowercase = s.to_lowercase();
+        if lowercase.contains("democrat") {
+            Ok(PartyPreference::Democrat)
+        } else if lowercase.contains("republican") {
+            Ok(PartyPreference::Republican)
+        } else {
+            Ok(PartyPreference::NotAffiliated)
+        }
+    }
+}
+
+impl Render for PartyPreference {
+    fn render(&self) -> Markup {
+        match self {
+            PartyPreference::Democrat => {
+                html! { span class="elative select-none whitespace-nowrap rounded-lg bg-blue-900 py-0.5 px-1 font-sans text-xs font-bold uppercase text-white" { "Democrat" } }
+            }
+            PartyPreference::Republican => {
+                html! { span class="elative select-none whitespace-nowrap rounded-lg bg-red-900 py-0.5 px-1 font-sans text-xs font-bold uppercase text-white" { "Republican" } }
+            }
+            PartyPreference::NotAffiliated => {
+                html! { span.party-not-affiliated { "Not Affiliated" } }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Candidate {
+    name: String,
+    percentage: f64,
+    votes: i32,
+    party_preference: PartyPreference,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct District {
+    name: String,
+    percent_turnout: f64,
+    registered_voters: i32,
+    ballots_counted: i32,
+    district_type: String,
+    district_type_subheading: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Contest {
+    ballot_title: String,
+    district: District,
+    id: u32,
+    candidates: Vec<Candidate>,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -61,7 +126,7 @@ impl Serialize for QuotedFloat {
 #[derive(Debug, Deserialize, Serialize)]
 struct ElectionData {
     #[serde(rename = "GEMS Contest ID")]
-    gems_contest_id: i32,
+    gems_contest_id: u32,
     #[serde(rename = "Contest Sort Seq")]
     contest_sort_seq: i32,
     #[serde(rename = "District Type")]
@@ -90,7 +155,7 @@ struct ElectionData {
     percent_of_votes: QuotedFloat,
 }
 
-async fn fetch_and_parse_csv() -> Result<Vec<ElectionData>, Box<dyn std::error::Error>> {
+async fn fetch_and_parse_csv() -> Result<Vec<Contest>, Box<dyn std::error::Error>> {
     let csv_url: String = env::var("CSV_URL").expect("No CSV URL provided.");
     let response = reqwest::get(csv_url).await?.text().await?;
     let mut reader = csv::ReaderBuilder::new()
@@ -103,10 +168,57 @@ async fn fetch_and_parse_csv() -> Result<Vec<ElectionData>, Box<dyn std::error::
         parsed_data.push(record);
     }
 
-    Ok(parsed_data)
+    Ok(process_election_data(parsed_data))
 }
 
-async fn get_all_data(data: web::Data<AppState>) -> Result<Vec<ElectionData>, actix_web::Error> {
+fn process_election_data(data: Vec<ElectionData>) -> Vec<Contest> {
+    let mut contests_map: HashMap<u32, Contest> = HashMap::new();
+
+    for record in data {
+        let contest_id = record.gems_contest_id;
+
+        let contest = contests_map.entry(contest_id).or_insert_with(|| Contest {
+            ballot_title: record.ballot_title.clone(),
+            district: District {
+                name: record.district_name.clone(),
+                percent_turnout: record.percent_turnout_for_district.0,
+                registered_voters: record.registered_voters_for_district,
+                ballots_counted: record.ballots_counted_for_district,
+                district_type: record.district_type.clone(),
+                district_type_subheading: record.district_type_subheading.clone(),
+            },
+            id: contest_id,
+            candidates: Vec::new(),
+        });
+
+        let candidate = Candidate {
+            name: record.ballot_response,
+            percentage: record.percent_of_votes.0,
+            votes: record.votes,
+            party_preference: PartyPreference::from_str(
+                &record.party_preference.unwrap_or_default(),
+            )
+            .unwrap_or(PartyPreference::NotAffiliated),
+        };
+
+        contest.candidates.push(candidate);
+    }
+
+    contests_map.into_values().collect()
+}
+
+fn contests_by_ballot_title(contests: Vec<Contest>) -> HashMap<String, Vec<Contest>> {
+    let mut contests_by_ballot_title: HashMap<String, Vec<Contest>> = HashMap::new();
+    for contest in contests {
+        contests_by_ballot_title
+            .entry(contest.ballot_title.clone())
+            .or_insert_with(Vec::new)
+            .push(contest);
+    }
+    contests_by_ballot_title
+}
+
+async fn get_all_data(data: web::Data<AppState>) -> Result<Vec<Contest>, actix_web::Error> {
     let mut redis = data.redis.lock().await;
 
     // Try to get cached data
@@ -161,40 +273,13 @@ struct BallotInfo {
     contest_id: i32,
     ballot_title: String,
     district_name: String,
-}
-
-async fn get_contests(data: web::Data<AppState>) -> Result<Vec<BallotInfo>, actix_web::Error> {
-    match get_all_data(data).await {
-        Ok(all_data) => {
-            let mut ballot_map: HashMap<i32, BallotInfo> = HashMap::new();
-
-            for record in all_data {
-                ballot_map
-                    .entry(record.gems_contest_id)
-                    .or_insert(BallotInfo {
-                        contest_id: record.gems_contest_id,
-                        ballot_title: record.ballot_title,
-                        district_name: record.district_name,
-                    });
-            }
-
-            let mut ballot_info: Vec<BallotInfo> =
-                ballot_map.into_iter().map(|(_id, info)| info).collect();
-
-            ballot_info.sort_by(|a, b| a.ballot_title.cmp(&b.ballot_title));
-            return Ok(ballot_info);
-        }
-        Err(e) => {
-            error!("Failed to get ballot titles: {}", e);
-            Err(actix_web::error::ErrorInternalServerError("Redis error"))
-        }
-    }
+    top_candidate: String,
 }
 
 // New HTML endpoints
 
 async fn index(data: web::Data<AppState>) -> impl Responder {
-    match get_contests(data).await {
+    match get_all_data(data).await.map(contests_by_ballot_title) {
         Ok(contests) => HttpResponse::Ok()
             .content_type("text/html")
             .body(templates::index(&contests).into_string()),
@@ -205,60 +290,22 @@ async fn index(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
-async fn get_summary_statistics_html(data: web::Data<AppState>) -> impl Responder {
+async fn contest_page(data: web::Data<AppState>, path: web::Path<u32>) -> impl Responder {
+    let contest_id = path.into_inner();
     match get_all_data(data).await {
         Ok(all_data) => {
-            let total_votes: i32 = all_data.iter().map(|record| record.votes).sum();
-            let total_registered_voters: i32 = all_data
-                .iter()
-                .map(|record| record.registered_voters_for_district)
-                .sum();
-            let average_turnout: f64 = all_data
-                .iter()
-                .map(|record| record.percent_turnout_for_district.0)
-                .sum::<f64>()
-                / all_data.len() as f64;
+            let mut contest = all_data.into_iter().find(|a| a.id == contest_id);
 
-            let markup = templates::summary_statistics(
-                total_votes,
-                total_registered_voters,
-                average_turnout,
-            );
-            HttpResponse::Ok()
-                .content_type("text/html")
-                .body(markup.into_string())
-        }
-        Err(_) => HttpResponse::InternalServerError().body("Failed to get data"),
-    }
-}
-
-#[derive(Deserialize)]
-struct ContestQuery {
-    contest: i32,
-}
-async fn get_contest_data_html(
-    data: web::Data<AppState>,
-    query: web::Query<ContestQuery>,
-) -> impl Responder {
-    let contest_id = query.contest;
-    match get_all_data(data).await {
-        Ok(all_data) => {
-            let mut contest_data: Vec<ElectionData> = all_data
-                .into_iter()
-                .filter(|record| record.gems_contest_id == contest_id)
-                .collect();
-
-            if contest_data.is_empty() {
+            if contest.is_none() {
                 return HttpResponse::Ok().body("No data available for this contest.");
             }
 
-            contest_data.sort_by(|a, b| {
-                b.percent_of_votes
-                    .0
-                    .partial_cmp(&a.percent_of_votes.0)
+            contest.as_mut().unwrap().candidates.sort_by(|a, b| {
+                b.percentage
+                    .partial_cmp(&a.percentage)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            let markup = templates::contest_details(&contest_data);
+            let markup = templates::contest_details_page(contest.unwrap());
             HttpResponse::Ok()
                 .content_type("text/html")
                 .body(markup.into_string())
@@ -291,14 +338,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors) // Add this line to wrap the entire app with CORS middleware
             .app_data(web::Data::new(app_state.clone()))
             .route("/", web::get().to(index))
-            .route(
-                "/election-data/summary-html",
-                web::get().to(get_summary_statistics_html),
-            )
-            .route(
-                "/election-data/contest-html",
-                web::get().to(get_contest_data_html),
-            )
+            .route("/{contest_id}", web::get().to(contest_page))
     })
     .bind("0.0.0.0:8080")?
     .run()
