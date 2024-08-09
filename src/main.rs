@@ -290,8 +290,8 @@ async fn index(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
-async fn contest_page(data: web::Data<AppState>, path: web::Path<(u32)>) -> impl Responder {
-    let (contest_id) = path.into_inner();
+async fn contest_page(data: web::Data<AppState>, path: web::Path<u32>) -> impl Responder {
+    let contest_id = path.into_inner();
     match get_all_data(data).await {
         Ok(all_data) => {
             let mut contest = all_data.into_iter().find(|a| a.id == contest_id);
