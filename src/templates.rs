@@ -12,7 +12,7 @@ pub fn header() -> Markup {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
                 title { "King County Election Data Dashboard" }
-                script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/1.9.10/htmx.min.js" {}
+                // script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/1.9.10/htmx.min.js" {}
                 script src="https://cdn.tailwindcss.com" {}
                 @if goatcounter_url.is_ok() {
                     script data-goatcounter=(goatcounter_url.unwrap()) src="//gc.zgo.at/count.js" async {}
@@ -84,6 +84,9 @@ pub fn contest_details_page(contest: Contest) -> Markup {
     html! {
         (layout(html! (
             h2 class="text-2xl font-semibold mb-2" { (contest.ballot_title) }
+            @if contest.district.name.contains("State of Washington") {
+                p { strong {"Note: This is King County Election results only, for statewide races the results don't represent the total count."} }
+            }
             p { strong { "District: " } (contest.district.name) }
             // p { strong { "Ballots Counted: " } (contest.) }
             // p { strong { "Registered Voters: " } (contest.registered_voters_for_district) }

@@ -268,16 +268,6 @@ async fn get_all_data(data: web::Data<AppState>) -> Result<Vec<Contest>, actix_w
     }
 }
 
-#[derive(Debug, Serialize)]
-struct BallotInfo {
-    contest_id: i32,
-    ballot_title: String,
-    district_name: String,
-    top_candidate: String,
-}
-
-// New HTML endpoints
-
 async fn index(data: web::Data<AppState>) -> impl Responder {
     match get_all_data(data).await.map(contests_by_ballot_title) {
         Ok(contests) => HttpResponse::Ok()
