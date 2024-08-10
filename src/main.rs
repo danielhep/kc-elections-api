@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 mod templates;
 
 const CACHE_KEY: &str = "election_data";
-const CACHE_EXPIRATION: u64 = 5; // 5 seconds
+const CACHE_EXPIRATION: u64 = 60; // 60 seconds
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 enum PartyPreference {
