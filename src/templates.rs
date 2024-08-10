@@ -57,9 +57,9 @@ pub fn index(ballot_info: &HashMap<String, Vec<Contest>>) -> Markup {
     html! {
         (layout(html!(
                 h2 class="text-2xl font-semibold mb-2" { "Contests by Ballot Title" }
-                div class="grid grid-cols-2 gap-4" {
+                div class="grid md:grid-cols-2 gap-4" {
                 @for title in keys_sorted {
-                    div {
+                    div class="bg-white rounded shadow p-2" {
                         h3 class="text-lg font-bold mb-2" { (title) }
                         ul class="grid grid-cols-[repeat(auto-fill,minmax(120px,max-content))] auto-rows-auto gap-x-4 gap-y-2" {
                             @for contest in ballot_info.get(&title).unwrap() {
@@ -67,13 +67,6 @@ pub fn index(ballot_info: &HashMap<String, Vec<Contest>>) -> Markup {
                             }
                         }
                     }
-                }
-            }
-
-            div {
-                h2 class="text-2xl font-semibold mb-2" { "Contest Details" }
-                div id="contest-details" class="bg-white p-4 rounded shadow" {
-                    "Select a contest to view details."
                 }
             }
         )))
@@ -91,13 +84,16 @@ pub fn contest_details_page(contest: Contest) -> Markup {
             // p { strong { "Ballots Counted: " } (contest.) }
             // p { strong { "Registered Voters: " } (contest.registered_voters_for_district) }
             // p { strong { "Turnout: " } (format!("{:.2}%", contest.percent_turnout_for_district.0)) }
-            h4 class="text-lg font-semibold mt-4 mb-2" { "Results:" }
-            ul {
-                @for candidate in contest.candidates {
-                    li {
-                        (candidate.name) " ("
-                        (candidate.party_preference)
-                        "): " (candidate.votes) " votes (" (format!("{:.2}%", candidate.percentage)) ")"
+            div class="bg-white rounded shadow p-2 mt-2" {
+                h4 class="text-lg font-semibold mb-2" { "Results:" }
+                ul class="inline-grid grid-cols-2 gap-x-1 gap-y-2" {
+                    @for candidate in contest.candidates {
+                        li class="contents" {
+                            div {(candidate.name) " ("
+                            (candidate.party_preference)
+                            "):"}
+                            div { (candidate.votes) " votes (" (format!("{:.2}%", candidate.percentage)) ")"}
+                        }
                     }
                 }
             }
