@@ -306,7 +306,7 @@ async fn main() -> std::io::Result<()> {
     });
 
     tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(3600)); // Check every hour
+        let mut interval = interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
             if let Err(e) = update_data(&db_client).await {

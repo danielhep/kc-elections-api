@@ -2,30 +2,45 @@ use std::str::FromStr;
 
 use crate::{Candidate, Contest, District, PartyPreference};
 use chrono::{DateTime, Utc};
-use tokio::sync::Mutex;
-use tokio_postgres::{Client, NoTls};
+use deadpool_postgres::{Config, Pool, Runtime};
+use tokio_postgres::NoTls;
+use url::Url;
 
 pub struct DbClient {
-    client: Mutex<Client>,
+    pool: Pool,
 }
 
 impl DbClient {
-    pub async fn new(connection_string: &str) -> Result<Self, tokio_postgres::Error> {
-        let (client, connection) = tokio_postgres::connect(connection_string, NoTls).await?;
+    pub async fn new(
+        connection_string: &str,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Parse the connection string
+        let url = Url::parse(connection_string)?;
 
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("Connection error: {}", e);
-            }
-        });
+        // Extract connection details
+        let host = url
+            .host_str()
+            .ok_or("No host in connection string")?
+            .to_string();
+        let port = url.port().unwrap_or(5432);
+        let user = url.username().to_string();
+        let password = url.password().unwrap_or("").to_string();
+        let dbname = url.path().trim_start_matches('/').to_string();
+        // Create deadpool config
+        let mut cfg = Config::new();
+        cfg.host = Some(host);
+        cfg.port = Some(port);
+        cfg.user = Some(user);
+        cfg.password = Some(password);
+        cfg.dbname = Some(dbname);
 
-        Ok(DbClient {
-            client: Mutex::new(client),
-        })
+        let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)?;
+
+        Ok(DbClient { pool })
     }
 
-    pub async fn create_tables(&self) -> Result<(), tokio_postgres::Error> {
-        let client = self.client.lock().await;
+    pub async fn create_tables(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let client = self.pool.get().await?;
         client
             .batch_execute(
                 "
@@ -64,15 +79,16 @@ impl DbClient {
                 );
                 ",
             )
-            .await
+            .await?;
+        Ok(())
     }
 
     pub async fn log_update(
         &self,
         contests: &[Contest],
         total_votes: i64,
-    ) -> Result<(), tokio_postgres::Error> {
-        let mut client = self.client.lock().await;
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
 
         // Insert update
@@ -113,8 +129,8 @@ impl DbClient {
         Ok(())
     }
 
-    pub async fn get_latest_total_votes(&self) -> Result<Option<i64>, tokio_postgres::Error> {
-        let client = self.client.lock().await;
+    pub async fn get_latest_total_votes(&self) -> Result<Option<i64>, Box<dyn std::error::Error>> {
+        let client = self.pool.get().await?;
         let row = client
             .query_opt(
                 "SELECT total_votes FROM updates ORDER BY timestamp DESC LIMIT 1",
@@ -125,8 +141,8 @@ impl DbClient {
         Ok(row.map(|r| r.get(0)))
     }
 
-    pub async fn get_latest_data(&self) -> Result<Vec<Contest>, tokio_postgres::Error> {
-        let client = self.client.lock().await;
+    pub async fn get_latest_data(&self) -> Result<Vec<Contest>, Box<dyn std::error::Error>> {
+        let client = self.pool.get().await?;
         let latest_update = client
             .query_one(
                 "SELECT id FROM updates ORDER BY timestamp DESC LIMIT 1",
@@ -199,8 +215,8 @@ impl DbClient {
     pub async fn get_data_at_timestamp(
         &self,
         timestamp: DateTime<Utc>,
-    ) -> Result<Vec<Contest>, tokio_postgres::Error> {
-        let client = self.client.lock().await;
+    ) -> Result<Vec<Contest>, Box<dyn std::error::Error>> {
+        let client = self.pool.get().await?;
         let update_row = client
             .query_one("SELECT id FROM updates WHERE timestamp = $1", &[&timestamp])
             .await?;

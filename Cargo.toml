@@ -19,7 +19,8 @@ tokio = { version = "1.39.2", features = ["full"] }
 maud = { version = "0.25", features = ["actix-web"] }
 listenfd = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
-
+deadpool-postgres = "0.12"
+url = "2.5.2"
 
 [dependencies.tokio-postgres]
 version = "0.7"
