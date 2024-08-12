@@ -17,7 +17,8 @@
 
   # Set up environment variables
   env = {
-    REDIS_URL = "redis://localhost:6379";  # Add Redis URL
+    # REDIS_URL = "redis://localhost:6379";  # Add Redis URL
+    DATABASE_URL = "postgresql://postgres@localhost/kcelections";  # Updated for PostgreSQL
     CSV_URL = "https://aqua.kingcounty.gov/elections/2024/aug-primary/webresults.csv";
     GOATCOUNTER_URL = "https://danielhep.goatcounter.com/count";
   };
@@ -41,9 +42,20 @@
   };
 
   # Redis service configuration
-  services.redis = {
+  # services.redis = {
+  #   enable = true;
+  #   port = 6379;
+  # };
+ # PostgreSQL service configuration
+  services.postgres = {
     enable = true;
-    port = 6379;
+    package = pkgs.postgresql_14;  # You can change this to the version you prefer
+    initialDatabases = [{ name = "kcelections"; }];
+    initialScript = ''
+      CREATE USER postgres SUPERUSER;
+      CREATE DATABASE kcelections WITH OWNER postgres;
+    '';
+    listen_addresses = "127.0.0.1";
   };
   # Add any other project-specific configurations here
 }

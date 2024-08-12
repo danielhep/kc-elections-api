@@ -18,3 +18,9 @@ serde_json = "1.0.122"
 tokio = { version = "1.39.2", features = ["full"] }
 maud = { version = "0.25", features = ["actix-web"] }
 listenfd = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+
+
+[dependencies.tokio-postgres]
+version = "0.7"
+features = ["with-chrono-0_4"]  # Add this line

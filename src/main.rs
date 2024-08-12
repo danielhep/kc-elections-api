@@ -3,18 +3,16 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use env_logger;
 use log::{error, info};
 use maud::{html, Markup, Render};
-use redis::aio::MultiplexedConnection;
-use redis::Client as RedisClient;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::env;
 use std::{io::Cursor, str::FromStr, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::time::{interval, Duration};
 
+mod database;
 mod templates;
 
-const CACHE_KEY: &str = "election_data";
-const CACHE_EXPIRATION: u64 = 60; // 60 seconds
+use database::DbClient;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 enum PartyPreference {
@@ -82,7 +80,7 @@ struct Contest {
 
 #[derive(Clone)]
 struct AppState {
-    redis: Arc<Mutex<MultiplexedConnection>>,
+    db: Arc<DbClient>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,7 +153,7 @@ struct ElectionData {
     percent_of_votes: QuotedFloat,
 }
 
-async fn fetch_and_parse_csv() -> Result<Vec<Contest>, Box<dyn std::error::Error>> {
+async fn fetch_and_parse_csv() -> Result<(Vec<Contest>, i64), Box<dyn std::error::Error>> {
     let csv_url: String = env::var("CSV_URL").expect("No CSV URL provided.");
     let response = reqwest::get(csv_url).await?.text().await?;
     let mut reader = csv::ReaderBuilder::new()
@@ -168,7 +166,30 @@ async fn fetch_and_parse_csv() -> Result<Vec<Contest>, Box<dyn std::error::Error
         parsed_data.push(record);
     }
 
-    Ok(process_election_data(parsed_data))
+    let contests = process_election_data(parsed_data);
+    let total_votes: i64 = contests
+        .iter()
+        .flat_map(|c| &c.candidates)
+        .map(|c| c.votes as i64)
+        .sum();
+
+    Ok((contests, total_votes))
+}
+
+async fn update_data(db_client: &DbClient) -> Result<(), Box<dyn std::error::Error>> {
+    let (parsed_data, total_votes) = fetch_and_parse_csv().await?;
+
+    let latest_total_votes = db_client.get_latest_total_votes().await?;
+
+    if latest_total_votes.map_or(true, |votes| votes != total_votes) {
+        // Log the update to PostgreSQL
+        db_client.log_update(&parsed_data, total_votes).await?;
+        info!("Data updated. New total votes: {}", total_votes);
+    } else {
+        info!("No change in data. Current total votes: {}", total_votes);
+    }
+
+    Ok(())
 }
 
 fn process_election_data(data: Vec<ElectionData>) -> Vec<Contest> {
@@ -218,58 +239,15 @@ fn contests_by_ballot_title(contests: Vec<Contest>) -> HashMap<String, Vec<Conte
     contests_by_ballot_title
 }
 
-async fn get_all_data(data: web::Data<AppState>) -> Result<Vec<Contest>, actix_web::Error> {
-    let mut redis = data.redis.lock().await;
-
-    // Try to get cached data
-    let cached_data: Option<String> = redis::cmd("GET")
-        .arg(CACHE_KEY)
-        .query_async(&mut *redis)
-        .await
-        .map_err(|e| {
-            error!("Redis error: {}", e);
-            actix_web::error::ErrorInternalServerError("Redis error")
-        })?;
-
-    match cached_data {
-        Some(data) => {
-            // If we have cached data, parse and return it
-            serde_json::from_str(&data).map_err(|e| {
-                error!("JSON deserialization error: {}", e);
-                actix_web::error::ErrorInternalServerError("Data parsing error")
-            })
-        }
-        None => {
-            // If no cached data, fetch and parse CSV
-            let parsed_data = fetch_and_parse_csv().await.map_err(|e| {
-                error!("CSV fetch and parse error: {}", e);
-                actix_web::error::ErrorInternalServerError("Data fetch error")
-            })?;
-
-            // Cache the new data
-            let json_data = serde_json::to_string(&parsed_data).map_err(|e| {
-                error!("JSON serialization error: {}", e);
-                actix_web::error::ErrorInternalServerError("Data serialization error")
-            })?;
-
-            let _: () = redis::cmd("SETEX")
-                .arg(CACHE_KEY)
-                .arg(CACHE_EXPIRATION)
-                .arg(&json_data)
-                .query_async(&mut *redis)
-                .await
-                .map_err(|e| {
-                    error!("Redis caching error: {}", e);
-                    actix_web::error::ErrorInternalServerError("Redis caching error")
-                })?;
-
-            Ok(parsed_data)
-        }
-    }
+async fn get_all_data(db_client: &DbClient) -> Result<Vec<Contest>, actix_web::Error> {
+    db_client.get_latest_data().await.map_err(|e| {
+        error!("Database error: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })
 }
 
 async fn index(data: web::Data<AppState>) -> impl Responder {
-    match get_all_data(data).await.map(contests_by_ballot_title) {
+    match get_all_data(&data.db).await.map(contests_by_ballot_title) {
         Ok(contests) => HttpResponse::Ok()
             .content_type("text/html")
             .body(templates::index(&contests).into_string()),
@@ -282,7 +260,7 @@ async fn index(data: web::Data<AppState>) -> impl Responder {
 
 async fn contest_page(data: web::Data<AppState>, path: web::Path<u32>) -> impl Responder {
     let contest_id = path.into_inner();
-    match get_all_data(data).await {
+    match get_all_data(&data.db).await {
         Ok(all_data) => {
             let mut contest = all_data.into_iter().find(|a| a.id == contest_id);
 
@@ -307,18 +285,35 @@ async fn contest_page(data: web::Data<AppState>, path: web::Path<u32>) -> impl R
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    let redis_url = env::var("REDIS_URL").unwrap_or("127.0.0.1".to_string());
-    info!("Redis URL: {}", redis_url);
-    let redis_client = RedisClient::open(format!("{}", redis_url))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    let redis_conn = redis_client
-        .get_multiplexed_async_connection()
+    let postgres_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+    info!("PostgreSQL URL: {}", postgres_url);
+    let db_client = DbClient::new(&postgres_url)
         .await
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-    let app_state = AppState {
-        redis: Arc::new(Mutex::new(redis_conn)),
-    };
+    // Wrap the DbClient in an Arc immediately
+    let db_client = Arc::new(db_client);
+
+    db_client
+        .clone()
+        .create_tables()
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+    let app_state = web::Data::new(AppState {
+        db: db_client.clone(),
+    });
+
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(3600)); // Check every hour
+        loop {
+            interval.tick().await;
+            if let Err(e) = update_data(&db_client).await {
+                error!("Failed to update data: {}", e);
+            }
+        }
+    });
 
     HttpServer::new(move || {
         // Create a CORS middleware
@@ -326,7 +321,7 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors) // Add this line to wrap the entire app with CORS middleware
-            .app_data(web::Data::new(app_state.clone()))
+            .app_data(app_state.clone())
             .route("/", web::get().to(index))
             .route("/{contest_id}", web::get().to(contest_page))
     })
